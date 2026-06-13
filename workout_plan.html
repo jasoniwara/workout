@@ -369,7 +369,7 @@
   <div style="margin-top:36px;" class="section-title">How to use this plan</div>
   <div class="tip-grid">
     <div class="tip-card"><div class="tip-card-icon">🏋️</div><div class="tip-card-title">Log every set</div><div class="tip-card-text">Enter your actual lbs and reps for each set. The plan uses your logs to auto-calculate next-session targets and PRs.</div></div>
-    <div class="tip-card"><div class="tip-card-icon">📈</div><div class="tip-card-title">Progression rule</div><div class="tip-card-text">Hit the top of the rep range 2 sessions in a row? Add 5 lbs next time. The target will update automatically.</div></div>
+    <div class="tip-card"><div class="tip-card-icon">📈</div><div class="tip-card-title">Progression rule</div><div class="tip-card-text">Hit the top of the rep range on every set, two sessions in a row, and the "Suggested" target bumps the weight — using the smallest jump you've actually made on that lift before.</div></div>
     <div class="tip-card"><div class="tip-card-icon">⏱</div><div class="tip-card-title">Rest times matter</div><div class="tip-card-text">Written into every workout. Shorter rests build stamina. Longer rests build strength.</div></div>
     <div class="tip-card"><div class="tip-card-icon">🗓</div><div class="tip-card-title">Missed a session?</div><div class="tip-card-text">Pick up where you left off. Two missed weeks in a row? Repeat that week before moving on.</div></div>
   </div>
@@ -866,6 +866,7 @@ function setLog(dayKey,exIdx,setIdx,field,val){
   if(!S.days[dayKey][exIdx])S.days[dayKey][exIdx]={};
   if(!S.days[dayKey][exIdx][setIdx])S.days[dayKey][exIdx][setIdx]={done:false};
   S.days[dayKey][exIdx][setIdx][field]=val;
+  if(field==='lbs'||field==='reps')S.days[dayKey][exIdx][setIdx].ts=Date.now();
   saveState();
   // update PR if lbs logged
   if(field==='lbs'||field==='reps') tryUpdatePR(dayKey,exIdx,setIdx);
@@ -927,11 +928,97 @@ function tryUpdatePR(dayKey,exIdx,setIdx){
   }
 }
 
-// target for next session: look at last time this exercise was done
-function getTarget(prKey,currentSets,targetReps){
-  if(!prKey||!S.prs[prKey]||!S.prs[prKey].length)return null;
-  const last=S.prs[prKey][S.prs[prKey].length-1];
-  return {lbs:last.lbs,reps:last.reps};
+// ============ PROGRESSION (DOUBLE-PROGRESSION TARGETS) ============
+// Typical weight jumps when no history exists yet to infer from.
+const DEFAULT_INCREMENTS={
+  squat:10, rdl:10, leg_press:10, split_squat:5, lunge:5, calf_raise:10,
+  incline_press:5, shoulder_press:5, pullup:5, row:5, clean_press:5,
+  ez_curl:5, incline_curl:5, hammer_curl:5,
+  chest_fly:5, tricep_pushdown:10, face_pull:10, cable_crunch:10,
+  goblet_squat:5, renegade_row:5, dips:5,
+};
+function parseRepRange(repsStr){
+  const nums=(repsStr.match(/\d+/g)||[]).map(Number);
+  if(!nums.length)return null;
+  return {min:Math.min(...nums),max:Math.max(...nums)};
+}
+// Walk every week/day of the plan and collect logged sessions per prKey,
+// in chronological order (using each set's logged timestamp, falling back
+// to week/day order for entries logged before timestamps existed).
+function buildExerciseSessions(){
+  const map={};
+  for(let w=1;w<=12;w++){
+    const days=getDays(w);
+    for(let di=0;di<4;di++){
+      const day=days[di];
+      const dayKey=`w${w}d${di}`;
+      let ei=0;
+      day.sections.forEach(sec=>sec.exercises.forEach(ex=>{
+        if(ex.weighted&&ex.prKey&&ex.sets){
+          const logged=[];
+          let maxTs=0;
+          for(let si=0;si<ex.sets;si++){
+            const log=getLog(dayKey,ei,si);
+            if(log.lbs&&log.reps){
+              logged.push({lbs:log.lbs,reps:log.reps});
+              if(log.ts&&log.ts>maxTs)maxTs=log.ts;
+            }
+          }
+          if(logged.length){
+            const range=parseRepRange(ex.reps);
+            const weight=logged[0].lbs;
+            const allAtTop=!!range&&logged.length===ex.sets&&logged.every(l=>l.lbs===weight&&l.reps>=range.max);
+            if(!map[ex.prKey])map[ex.prKey]=[];
+            map[ex.prKey].push({week:w,di,dayKey,weight,logged,range,allAtTop,ts:maxTs||(w*10+di)});
+          }
+        }
+        ei++;
+      }));
+    }
+  }
+  Object.values(map).forEach(arr=>arr.sort((a,b)=>a.ts-b.ts));
+  return map;
+}
+// Use the smallest weight jump the user has actually made on this lift,
+// or a sensible default for the equipment type if there's no history yet.
+function inferIncrement(prKey,hist){
+  const weights=[...new Set(hist.map(s=>s.weight))].sort((a,b)=>a-b);
+  const diffs=[];
+  for(let i=1;i<weights.length;i++){
+    const d=weights[i]-weights[i-1];
+    if(d>0)diffs.push(d);
+  }
+  if(diffs.length)return Math.min(...diffs);
+  return DEFAULT_INCREMENTS[prKey]||5;
+}
+// Double progression: stay at a weight until the full rep range top is hit
+// for 2 sessions in a row, then bump weight (by the lifter's own typical
+// jump for this lift) and drop back to the bottom of the rep range.
+function getTarget(prKey,sessions){
+  const hist=sessions&&sessions[prKey];
+  if(!hist||!hist.length)return null;
+  const last=hist[hist.length-1];
+  const prev=hist.length>1?hist[hist.length-2]:null;
+  const range=last.range;
+  if(!range){
+    return {lbs:last.weight,reps:last.logged[0].reps,note:`Last logged ${last.weight} lbs × ${last.logged[0].reps}`};
+  }
+  const readyToProgress=last.allAtTop&&prev&&prev.allAtTop&&prev.weight===last.weight;
+  if(readyToProgress){
+    const inc=inferIncrement(prKey,hist);
+    return {lbs:last.weight+inc,reps:range.min,note:`🔼 +${inc} lbs — hit ${range.max} reps for 2 sessions straight`};
+  }
+  if(last.allAtTop){
+    return {lbs:last.weight,reps:range.max,note:`Hit ${range.max} reps again to earn a weight bump`};
+  }
+  return {lbs:last.weight,reps:range.max,note:`Aim for ${range.max} reps at this weight`};
+}
+function applySuggestedTarget(dayKey,ei,totalSets,lbs,reps){
+  for(let si=0;si<totalSets;si++){
+    setLog(dayKey,ei,si,'lbs',lbs);
+    setLog(dayKey,ei,si,'reps',reps);
+  }
+  renderDays(currentWeek);
 }
 
 // ============ RENDER SCHEDULE ============
@@ -974,6 +1061,7 @@ function selectWeek(w){
 function renderDays(week){
   const grid=document.getElementById('dayGrid');
   const days=getDays(week);
+  const sessions=buildExerciseSessions();
   grid.innerHTML='';
   const p=week<=4?1:week<=8?2:3;
   const pct=Math.round(((week-1)/12)*100);
@@ -1015,8 +1103,8 @@ function renderDays(week){
           return;
         }
         // target hint from last session
-        const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,ex.sets,ex.reps):null;
-        const tgtHtml=tgt?`<div class="ex-target">Last logged: <span>${tgt.lbs} lbs × ${tgt.reps}</span> — aim to match or beat <button class="quickfill-chip" onclick="quickFillSet('${dayKey}',${ei},0,${tgt.lbs},${tgt.reps})">↺ Fill set 1</button></div>`:'';
+        const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,sessions):null;
+        const tgtHtml=tgt?`<div class="ex-target">Suggested: <span>${tgt.lbs} lbs × ${tgt.reps}</span> — ${tgt.note} <button class="quickfill-chip" onclick="applySuggestedTarget('${dayKey}',${ei},${ex.sets},${tgt.lbs},${tgt.reps})">↺ Fill all sets</button></div>`:'';
         let colLabels=`<div class="set-col-labels"><span class="set-col-label"></span><span class="set-col-label">${ex.weighted?'Weight (lbs)':'—'}</span><span class="set-col-label">Reps done</span><span class="set-col-label"></span><span class="set-col-label"></span></div>`;
         let setRowsHtml='';
         for(let si=0;si<ex.sets;si++){
@@ -1113,12 +1201,7 @@ function showPlates(btn){
   showToast(`🍽 ${val} lbs → ${calcPlates(val)} (45 lb bar)`,'toast-pr');
 }
 
-// ============ QUICK-FILL / BULK FILL / REPEAT ============
-function quickFillSet(dayKey,ei,si,lbs,reps){
-  setLog(dayKey,ei,si,'lbs',lbs);
-  setLog(dayKey,ei,si,'reps',reps);
-  renderDays(currentWeek);
-}
+// ============ BULK FILL / REPEAT ============
 function fillAllSets(dayKey,ei,totalSets){
   const log0=getLog(dayKey,ei,0);
   if(!log0.lbs&&!log0.reps){showToast('Log set 1 first','toast-pr');return;}
