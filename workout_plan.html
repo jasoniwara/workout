@@ -392,6 +392,16 @@
     <p class="section-sub">All data is pulled from your workout logs. Keep showing up and this page fills itself.</p>
   </div>
 
+  <div class="sub-heading" style="margin-top:0;color:var(--muted);">Backup</div>
+  <p class="section-sub" style="margin-bottom:14px;">Everything is stored on this device only. Export a backup occasionally so you don't lose your progress.</p>
+  <div style="display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap;">
+    <button class="repeat-btn" style="width:auto;flex:1;min-width:160px;" onclick="exportData()">⬇ Export backup (JSON)</button>
+    <label class="repeat-btn" style="width:auto;flex:1;min-width:160px;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+      ⬆ Import backup
+      <input type="file" accept="application/json" style="display:none" onchange="importData(this)">
+    </label>
+  </div>
+
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:24px;">
     <div class="sub-heading" style="margin-top:0;color:var(--muted);">12-Week Calendar</div>
     <div class="cal-col-labels" id="calColLabels"></div>
@@ -436,6 +446,36 @@
 // ============ STATE ============
 function loadState(){try{return JSON.parse(localStorage.getItem('wp2_state')||'{}');}catch(e){return{};}}
 function saveState(){try{localStorage.setItem('wp2_state',JSON.stringify(S));}catch(e){}}
+
+// ============ BACKUP / RESTORE ============
+function exportData(){
+  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`workout-backup-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function importData(input){
+  const file=input.files&&input.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      if(!data||typeof data!=='object'||Array.isArray(data))throw new Error('Invalid backup');
+      localStorage.setItem('wp2_state',JSON.stringify(data));
+      location.reload();
+    }catch(err){
+      showToast('⚠️ Invalid backup file','toast-pr');
+    }
+  };
+  reader.readAsText(file);
+  input.value='';
+}
 let S=loadState();
 if(!S.days)S.days={};       // S.days[dayKey][exIdx][setIdx] = {lbs, reps, done}
 if(!S.done)S.done={};       // S.done[dayKey] = true
