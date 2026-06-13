@@ -105,6 +105,7 @@
   .ex-note{font-size:11px;color:var(--muted);margin-top:2px;}
   .ex-target{font-size:11px;color:var(--muted);margin-top:3px;}
   .ex-target span{color:var(--accent);font-weight:600;}
+  .plateau-flag{font-size:11px;color:#e6b800;background:rgba(230,184,0,0.1);border:1px solid rgba(230,184,0,0.3);border-radius:var(--radius-sm);padding:5px 8px;margin-top:6px;}
 
   /* SET ROWS */
   .set-rows{padding:6px 14px 12px;display:grid;gap:5px;}
@@ -126,6 +127,12 @@
   .cardio-input{background:var(--surface3);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-size:13px;outline:none;width:120px;}
   .cardio-input:focus{border-color:var(--border2);}
   .cardio-label{font-size:12px;color:var(--muted);}
+
+  /* DAY NOTES */
+  .day-notes{margin-top:14px;}
+  .day-notes-label{display:block;font-size:10px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+  .day-notes-input{width:100%;min-height:60px;resize:vertical;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none;}
+  .day-notes-input:focus{border-color:var(--border2);}
 
   /* COMPLETE BUTTON */
   .complete-btn{width:100%;margin-top:18px;padding:11px;border-radius:var(--radius-sm);border:1px solid rgba(200,245,90,0.3);background:var(--accent-dim);color:var(--accent);font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.02em;transition:all 0.15s;}
@@ -279,6 +286,11 @@
   .pr-delta{font-size:11px;color:var(--accent);margin-top:2px;}
   .pr-sparkline{display:block;width:100%;height:28px;margin-top:8px;}
   .pr-sparkline polyline{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+
+  /* WEEKLY VOLUME CHART */
+  .vol-chart{display:block;width:100%;height:60px;margin-top:8px;}
+  .vol-chart .vol-bar-done{fill:var(--accent);}
+  .vol-chart .vol-bar-empty{fill:var(--border);}
 
   /* CARDIO BEST */
   .cardio-best{font-size:11px;color:var(--muted);padding:0 14px 10px;}
@@ -506,6 +518,7 @@ if(!S.tokens)S.tokens=0;
 if(!S.unlockedThemes)S.unlockedThemes=['lime'];
 if(!S.theme)S.theme='lime';
 if(S.seenIntro===undefined)S.seenIntro=false;
+if(!S.notes)S.notes={};     // S.notes[dayKey] = string
 
 // ============ XP / LEVELS / PHASE UNLOCK ============
 const PHASE2_XP=1000, PHASE3_XP=2800;
@@ -589,6 +602,22 @@ function parseRestSeconds(rest){
   if(m)return parseInt(m[1]);
   return 0;
 }
+function playRestEndBeep(){
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const osc=ctx.createOscillator();
+    const gain=ctx.createGain();
+    osc.type='sine';
+    osc.frequency.value=880;
+    gain.gain.setValueAtTime(0.001,ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2,ctx.currentTime+0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.3);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime+0.32);
+    osc.onended=()=>ctx.close();
+  }catch(e){}
+}
 function startRestTimer(seconds){
   if(!seconds)return;
   clearInterval(restInterval);
@@ -605,6 +634,7 @@ function startRestTimer(seconds){
       clearInterval(restInterval);
       el.classList.remove('show');
       if(navigator.vibrate)navigator.vibrate([200,100,200]);
+      playRestEndBeep();
       return;
     }
     timeEl.textContent=remaining;
@@ -707,6 +737,37 @@ function totalVolume(){
   });
   return total;
 }
+function volumeByWeek(){
+  const vols=Array(12).fill(0);
+  Object.entries(S.days||{}).forEach(([dayKey,exObj])=>{
+    const m=dayKey.match(/^w(\d+)d(\d+)$/);
+    if(!m)return;
+    const week=parseInt(m[1]);
+    if(week<1||week>12)return;
+    Object.values(exObj).forEach(setObj=>{
+      if(setObj&&typeof setObj==='object'){
+        Object.values(setObj).forEach(s=>{
+          if(s&&typeof s==='object'&&s.done&&s.lbs&&s.reps)vols[week-1]+=s.lbs*s.reps;
+        });
+      }
+    });
+  });
+  return vols;
+}
+function barChart(values,width=300,height=60){
+  const max=Math.max(...values,1);
+  const n=values.length;
+  const gap=2;
+  const barW=(width-(n-1)*gap)/n;
+  let bars='';
+  values.forEach((v,i)=>{
+    const h=Math.max((v/max)*height,v>0?2:0);
+    const x=i*(barW+gap);
+    const y=height-h;
+    bars+=`<rect class="${v>0?'vol-bar-done':'vol-bar-empty'}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(h,1).toFixed(1)}" />`;
+  });
+  return `<svg class="vol-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${bars}</svg>`;
+}
 function weekGlanceHtml(week){
   const days=getDays(week);
   const next=findNextDay();
@@ -794,6 +855,11 @@ function renderDashboard(){
       <div class="dash-card-label">Total volume</div>
       <div class="dash-stat-value">${volume.toLocaleString()}<span style="font-size:14px;color:var(--muted);"> lbs</span></div>
       <div class="dash-stat-sub">lifted across all logged sets</div>
+    </div>
+    <div class="dash-card" style="grid-column:span 2;">
+      <div class="dash-card-label">Weekly volume</div>
+      ${barChart(volumeByWeek())}
+      <div class="dash-stat-sub">lbs lifted per week, Wk 1–12</div>
     </div>
     ${bodyStatCardHtml()}
     <div class="dash-card" style="grid-column:span 2;">
@@ -1009,6 +1075,10 @@ function cardioLog(dayKey,exIdx,field,val){
 function getCardioLog(dayKey,exIdx){
   return (S.days[dayKey]&&S.days[dayKey][exIdx])||{};
 }
+function setDayNote(dayKey,val){
+  S.notes[dayKey]=val;
+  saveState();
+}
 
 // ============ PR AUTO-COMPUTE ============
 // S.prs[prKey] = [{lbs, reps, date, week, day}]  — auto-accumulated
@@ -1139,6 +1209,18 @@ function getTarget(prKey,sessions){
   }
   return {lbs:last.weight,reps:range.max,note:`Aim for ${range.max} reps at this weight`};
 }
+// Flags a plateau when the lifter has been stuck at the same weight for
+// 3+ sessions in a row without hitting the top of the rep range — a sign
+// to consider a deload or check form rather than just grinding away.
+function getPlateauFlag(prKey,sessions){
+  const hist=sessions&&sessions[prKey];
+  if(!hist||hist.length<3)return false;
+  const recent=hist.slice(-3);
+  if(!recent[0].range)return false;
+  const sameWeight=recent.every(s=>s.weight===recent[0].weight);
+  const noneAtTop=recent.every(s=>!s.allAtTop);
+  return sameWeight&&noneAtTop;
+}
 function applySuggestedTarget(dayKey,ei,totalSets,lbs,reps){
   for(let si=0;si<totalSets;si++){
     setLog(dayKey,ei,si,'lbs',lbs);
@@ -1233,6 +1315,7 @@ function renderDays(week){
         // target hint from last session
         const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,sessions):null;
         const tgtHtml=tgt?`<div class="ex-target">Suggested: <span>${tgt.lbs} lbs × ${tgt.reps}</span> — ${tgt.note} <button class="quickfill-chip" onclick="applySuggestedTarget('${dayKey}',${ei},${ex.sets},${tgt.lbs},${tgt.reps})">↺ Fill all sets</button></div>`:'';
+        const plateauHtml=(ex.weighted&&ex.prKey&&getPlateauFlag(ex.prKey,sessions))?`<div class="plateau-flag">⚠ Stuck at this weight for 3+ sessions — consider a deload or check your form</div>`:'';
         let colLabels=`<div class="set-col-labels"><span class="set-col-label"></span><span class="set-col-label">${ex.weighted?'Weight (lbs)':'—'}</span><span class="set-col-label">Reps done</span><span class="set-col-label"></span><span class="set-col-label"></span></div>`;
         let setRowsHtml='';
         for(let si=0;si<ex.sets;si++){
@@ -1273,6 +1356,7 @@ function renderDays(week){
             ${ex.note?`<div class="ex-note">${ex.note}</div>`:''}
             <div class="ex-target" style="margin-top:3px;font-size:11px;color:var(--muted);">Target: <span style="color:var(--accent);font-weight:600;">${ex.sets} sets × ${ex.reps} reps</span>${restTagHtml}</div>
             ${tgtHtml}
+            ${plateauHtml}
           </div></div>
           ${colLabels}
           <div class="set-rows">${setRowsHtml}</div>
@@ -1298,6 +1382,10 @@ function renderDays(week){
       </div>
       <div class="day-card-body">
         ${sectionsHtml}
+        <div class="day-notes">
+          <label class="day-notes-label" for="note-${dayKey}">Notes</label>
+          <textarea class="day-notes-input" id="note-${dayKey}" placeholder="How'd it feel? Anything to remember for next time…" oninput="setDayNote('${dayKey}',this.value)">${S.notes[dayKey]||''}</textarea>
+        </div>
         ${week>1?`<button class="repeat-btn" onclick="repeatLastWeek(${week},${di})">↻ Repeat last week's numbers</button>`:''}
         <button class="complete-btn${isDone?' done-state':''}" id="cbtn-${dayKey}" onclick="markDone('${dayKey}',${week},${di})">
           ${isDone?'✓ Workout complete':'Mark workout complete'}
