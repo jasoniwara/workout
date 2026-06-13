@@ -277,6 +277,21 @@
 
   /* PR DELTA / VOLUME */
   .pr-delta{font-size:11px;color:var(--accent);margin-top:2px;}
+  .pr-sparkline{display:block;width:100%;height:28px;margin-top:8px;}
+  .pr-sparkline polyline{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+
+  /* CARDIO BEST */
+  .cardio-best{font-size:11px;color:var(--muted);padding:0 14px 10px;}
+  .cardio-best .cardio-best-val{color:var(--accent);font-weight:600;}
+
+  /* WEEK AT A GLANCE */
+  .week-glance{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+  .wg-day{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 8px;text-align:center;cursor:pointer;}
+  .wg-day.wg-done{border-color:var(--accent-dim);}
+  .wg-day.wg-next{border-color:var(--accent);background:var(--accent-dim);}
+  .wg-label{font-size:10px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+  .wg-name{font-size:11px;font-weight:500;margin-bottom:4px;line-height:1.2;}
+  .wg-status{font-size:14px;}
 
   @media(max-width:600px){
     nav{padding:0 12px;}
@@ -692,6 +707,24 @@ function totalVolume(){
   });
   return total;
 }
+function weekGlanceHtml(week){
+  const days=getDays(week);
+  const next=findNextDay();
+  let tiles='';
+  for(let di=0;di<4;di++){
+    const day=days[di];
+    const dayKey=`w${week}d${di}`;
+    const done=!!S.done[dayKey];
+    const isNext=!!(next&&next.week===week&&next.di===di);
+    const status=done?'✓':isNext?'▶':'·';
+    tiles+=`<div class="wg-day${done?' wg-done':''}${isNext?' wg-next':''}" onclick="goToWorkout(${week},${di})">
+      <div class="wg-label">${day.label}</div>
+      <div class="wg-name">${day.name}</div>
+      <div class="wg-status">${status}</div>
+    </div>`;
+  }
+  return tiles;
+}
 function renderDashboard(){
   const el=document.getElementById('dashGrid');
   if(!el)return;
@@ -725,10 +758,16 @@ function renderDashboard(){
   const recent=allPRs.slice(0,3);
   const prHtml=recent.length?recent.map(p=>`<div class="recent-pr-row"><span>${p.label}</span><span>${p.lbs} lbs × ${p.reps}</span></div>`).join(''):`<div class="recent-pr-row" style="color:var(--muted);border-bottom:none;">No PRs logged yet — get to work.</div>`;
 
+  const weekForGlance=next?next.week:12;
+
   el.innerHTML=`
     <div class="dash-card dash-next-card">
       <div class="dash-card-label">Up next</div>
       ${nextHtml}
+    </div>
+    <div class="dash-card" style="grid-column:span 2;">
+      <div class="dash-card-label">This week at a glance · Week ${weekForGlance}</div>
+      <div class="week-glance">${weekGlanceHtml(weekForGlance)}</div>
     </div>
     <div class="dash-card">
       <div class="dash-card-label">Level</div>
@@ -914,9 +953,56 @@ function setLog(dayKey,exIdx,setIdx,field,val){
 function getLog(dayKey,exIdx,setIdx){
   return (S.days[dayKey]&&S.days[dayKey][exIdx]&&S.days[dayKey][exIdx][setIdx])||{};
 }
+function findExerciseByGlobalIndex(week,di,exIdx){
+  const day=getDays(week)[di];
+  let gi=0;
+  for(let si=0;si<day.sections.length;si++){
+    for(let ei=0;ei<day.sections[si].exercises.length;ei++){
+      if(gi===exIdx)return day.sections[si].exercises[ei];
+      gi++;
+    }
+  }
+  return null;
+}
+function getCardioBest(prKey){
+  let best=null;
+  for(let w=1;w<=12;w++){
+    const days=getDays(w);
+    for(let di=0;di<4;di++){
+      const dayKey=`w${w}d${di}`;
+      if(!S.days[dayKey])continue;
+      const day=days[di];
+      let gi=0;
+      for(let si=0;si<day.sections.length;si++){
+        for(let ei=0;ei<day.sections[si].exercises.length;ei++){
+          const ex=day.sections[si].exercises[ei];
+          if(ex.isCardio&&ex.prKey===prKey){
+            const log=S.days[dayKey][gi];
+            if(log&&typeof log.val==='number'&&log.val>0&&(best===null||log.val>best))best=log.val;
+          }
+          gi++;
+        }
+      }
+    }
+  }
+  return best;
+}
 function cardioLog(dayKey,exIdx,field,val){
   if(!S.days[dayKey])S.days[dayKey]={};
   if(!S.days[dayKey][exIdx])S.days[dayKey][exIdx]={};
+  if(field==='val'){
+    const parts=dayKey.match(/w(\d+)d(\d+)/);
+    const week=parseInt(parts[1]),di=parseInt(parts[2]);
+    const ex=findExerciseByGlobalIndex(week,di,exIdx);
+    const prevBest=ex&&ex.prKey?getCardioBest(ex.prKey):null;
+    S.days[dayKey][exIdx][field]=val;
+    saveState();
+    if(ex&&val>0&&(prevBest===null||val>prevBest)){
+      addXP(15);
+      showToast(`🏆 New best: ${val} ${ex.cardioLabel||''}`,'toast-pr');
+    }
+    return;
+  }
   S.days[dayKey][exIdx][field]=val;
   saveState();
 }
@@ -1123,15 +1209,17 @@ function renderDays(week){
         const ei=exGlobalIdx++;
         if(ex.isCardio){
           const clog=getCardioLog(dayKey,ei);
+          const cbest=ex.prKey?getCardioBest(ex.prKey):null;
           sectionsHtml+=`<div class="ex-block">
             <div class="ex-block-top"><div class="ex-block-info">
               <div class="ex-name">${ex.name}</div>
               <div class="ex-note">${ex.reps}${ex.note?' — '+ex.note:''}</div>
             </div></div>
             <div class="cardio-input-row">
-              <input class="cardio-input" type="number" placeholder="${ex.cardioLabel||'Value'}" value="${clog.val||''}" step="0.5" oninput="cardioLog('${dayKey}',${ei},'val',parseFloat(this.value)||0);saveState()">
+              <input class="cardio-input" type="number" placeholder="${ex.cardioLabel||'Value'}" value="${clog.val||''}" step="0.5" oninput="cardioLog('${dayKey}',${ei},'val',parseFloat(this.value)||0)">
               <span class="cardio-label">${ex.cardioLabel||''}</span>
             </div>
+            ${cbest!==null?`<div class="cardio-best">Best so far: <span class="cardio-best-val">${cbest}</span> ${ex.cardioLabel||''}</div>`:''}
           </div>`;
           return;
         }
@@ -1405,6 +1493,18 @@ function renderPRs(){
   renderPRGroup('prBiceps',PR_DEFS.biceps);
   renderPRGroup('prLegs',PR_DEFS.legs);
 }
+function sparkline(values,width=120,height=28){
+  if(values.length<2)return'';
+  const min=Math.min(...values),max=Math.max(...values);
+  const range=max-min||1;
+  const pad=2;
+  const points=values.map((v,i)=>{
+    const x=(i/(values.length-1))*(width-pad*2)+pad;
+    const y=height-pad-((v-min)/range)*(height-pad*2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg class="pr-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"><polyline points="${points}"/></svg>`;
+}
 function renderPRGroup(containerId,defs){
   const el=document.getElementById(containerId);
   el.innerHTML='';
@@ -1431,7 +1531,7 @@ function renderPRGroup(containerId,defs){
     card.innerHTML=`
       <div class="pr-card-label">${def.label}</div>
       ${best?`<div class="pr-best">${best.lbs}<span class="pr-best-unit">lbs</span></div>
-      <div class="pr-best-sub">${best.reps} reps · Est. 1RM: ${best.e1rm} lbs</div>${deltaHtml}`
+      <div class="pr-best-sub">${best.reps} reps · Est. 1RM: ${best.e1rm} lbs</div>${deltaHtml}${history.length>1?sparkline(history.map(h=>h.e1rm)):''}`
       :`<div class="pr-best" style="color:var(--muted)">—</div><div class="pr-best-sub">No data yet</div>`}
       ${history.length?`<div class="pr-history">${histHtml}</div>`:''}`;
     el.appendChild(card);
