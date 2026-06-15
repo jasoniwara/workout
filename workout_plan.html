@@ -618,33 +618,78 @@ function playRestEndBeep(){
     osc.onended=()=>ctx.close();
   }catch(e){}
 }
-function startRestTimer(seconds){
-  if(!seconds)return;
+const REST_END_KEY='wp_rest_end';
+function requestNotifyPermission(){
+  if('Notification' in window && Notification.permission==='default'){
+    Notification.requestPermission().catch(()=>{});
+  }
+}
+function restTimerDone(notifyIfHidden){
   clearInterval(restInterval);
-  let remaining=seconds;
+  restInterval=null;
+  localStorage.removeItem(REST_END_KEY);
+  const el=document.getElementById('restTimer');
+  if(el)el.classList.remove('show');
+  if(navigator.vibrate)navigator.vibrate([200,100,200]);
+  playRestEndBeep();
+  if(notifyIfHidden&&document.hidden&&'Notification' in window&&Notification.permission==='granted'){
+    try{new Notification('Rest complete',{body:'Time to get back to it 💪',icon:'icons/icon-192.png'});}catch(e){}
+  }
+}
+// Renders/ticks the rest timer based on a fixed end timestamp (wall clock),
+// so it stays accurate even if the tab is backgrounded/throttled and the
+// interval doesn't fire on schedule — when it resumes, it just catches up.
+function showRestTimer(endTime,totalSeconds){
+  clearInterval(restInterval);
   const el=document.getElementById('restTimer');
   const timeEl=document.getElementById('restTimerTime');
   const fillEl=document.getElementById('restTimerFill');
+  if(!el)return;
   el.classList.add('show');
-  timeEl.textContent=remaining;
-  fillEl.style.width='100%';
-  restInterval=setInterval(()=>{
-    remaining--;
+  const tick=()=>{
+    const remaining=Math.ceil((endTime-Date.now())/1000);
     if(remaining<=0){
-      clearInterval(restInterval);
-      el.classList.remove('show');
-      if(navigator.vibrate)navigator.vibrate([200,100,200]);
-      playRestEndBeep();
+      restTimerDone(true);
       return;
     }
     timeEl.textContent=remaining;
-    fillEl.style.width=(remaining/seconds*100)+'%';
-  },1000);
+    fillEl.style.width=(remaining/totalSeconds*100)+'%';
+  };
+  tick();
+  restInterval=setInterval(tick,250);
+}
+function startRestTimer(seconds){
+  if(!seconds)return;
+  requestNotifyPermission();
+  const endTime=Date.now()+seconds*1000;
+  localStorage.setItem(REST_END_KEY,JSON.stringify({end:endTime,total:seconds}));
+  showRestTimer(endTime,seconds);
+}
+// If the app was closed/backgrounded while a rest timer was running, pick
+// up where it left off — or let the user know it finished while away.
+function resumeRestTimer(){
+  try{
+    const raw=localStorage.getItem(REST_END_KEY);
+    if(!raw)return;
+    const{end,total}=JSON.parse(raw);
+    if(Date.now()<end){
+      showRestTimer(end,total);
+    }else{
+      localStorage.removeItem(REST_END_KEY);
+      if(navigator.vibrate)navigator.vibrate([200,100,200]);
+      showToast('⏱ Rest finished while you were away','toast-level');
+    }
+  }catch(e){}
 }
 function skipRest(){
   clearInterval(restInterval);
+  restInterval=null;
+  localStorage.removeItem(REST_END_KEY);
   document.getElementById('restTimer').classList.remove('show');
 }
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&restInterval===null)resumeRestTimer();
+});
 
 // ============ STREAK ============
 function updateStreak(){
@@ -986,9 +1031,14 @@ const PR_DEFS = {
   strength:[
     {key:'incline_press',label:'Incline DB press (per hand)'},
     {key:'shoulder_press',label:'Seated shoulder press (per hand)'},
+    {key:'chest_fly',label:'Cable chest fly'},
+    {key:'tricep_pushdown',label:'Tricep pushdown'},
     {key:'pullup',label:'Pull-up / lat pulldown'},
     {key:'row',label:'Row (per hand)'},
+    {key:'face_pull',label:'Cable face pull'},
     {key:'clean_press',label:'Clean & press (per hand)'},
+    {key:'renegade_row',label:'Renegade row (per hand)'},
+    {key:'dips',label:'Dips'},
   ],
   biceps:[
     {key:'ez_curl',label:'EZ bar curl (total)'},
@@ -1002,6 +1052,8 @@ const PR_DEFS = {
     {key:'leg_press',label:'Leg press'},
     {key:'lunge',label:'Walking lunge (per hand)'},
     {key:'calf_raise',label:'Calf raise'},
+    {key:'goblet_squat',label:'Goblet squat'},
+    {key:'cable_crunch',label:'Cable crunch'},
   ]
 };
 
@@ -1013,8 +1065,6 @@ function setLog(dayKey,exIdx,setIdx,field,val){
   S.days[dayKey][exIdx][setIdx][field]=val;
   if(field==='lbs'||field==='reps')S.days[dayKey][exIdx][setIdx].ts=Date.now();
   saveState();
-  // update PR if lbs logged
-  if(field==='lbs'||field==='reps') tryUpdatePR(dayKey,exIdx,setIdx);
 }
 function getLog(dayKey,exIdx,setIdx){
   return (S.days[dayKey]&&S.days[dayKey][exIdx]&&S.days[dayKey][exIdx][setIdx])||{};
@@ -1155,7 +1205,7 @@ function buildExerciseSessions(){
           let maxTs=0;
           for(let si=0;si<ex.sets;si++){
             const log=getLog(dayKey,ei,si);
-            if(log.lbs&&log.reps){
+            if(log.done&&log.lbs&&log.reps){
               logged.push({lbs:log.lbs,reps:log.reps});
               if(log.ts&&log.ts>maxTs)maxTs=log.ts;
             }
@@ -1474,6 +1524,7 @@ function toggleSetDone(dayKey,ei,si,restSec){
   }
   if(nowDone){
     addXP(2);
+    tryUpdatePR(dayKey,ei,si);
     if(restSec)startRestTimer(restSec);
   }
 }
@@ -1781,6 +1832,7 @@ refreshStatusBar();
 renderDashboard();
 applyTheme();
 if(S.activeSession)showSessionBar();
+resumeRestTimer();
 
 // swipe between day cards
 (function(){
