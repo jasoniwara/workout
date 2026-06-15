@@ -162,9 +162,12 @@
   .pr-best-unit{font-size:13px;color:var(--muted);font-weight:400;margin-left:2px;}
   .pr-best-sub{font-size:11px;color:var(--muted);margin-top:3px;}
   .pr-history{margin-top:10px;border-top:1px solid var(--border);padding-top:8px;}
-  .pr-history-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:2px 0;}
+  .pr-history-row{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11px;color:var(--muted);padding:2px 0;}
+  .pr-history-row>span:first-child{flex:1;}
   .pr-history-row.best-entry{color:var(--text);font-weight:500;}
   .pr-history-row .pr-new{font-size:9px;font-weight:700;color:var(--accent);background:var(--accent-dim);padding:1px 5px;border-radius:99px;margin-left:4px;}
+  .pr-delete-btn{flex:none;background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 4px;line-height:1;}
+  .pr-delete-btn:hover{color:var(--text);}
 
   /* SECTION TYPOGRAPHY */
   .section-title{font-size:21px;font-weight:700;letter-spacing:-0.01em;margin-bottom:5px;}
@@ -1627,6 +1630,18 @@ function updateCalSummary(){
 }
 
 // ============ PR RENDER ============
+// Lets you remove a bad PR entry (e.g. recorded from a misclick before
+// the "only count submitted sets" fix). Recent PRs / stat sheet / dashboard
+// all derive from S.prs, so removing it here cleans it up everywhere.
+function deletePREntry(prKey,idx){
+  if(!S.prs[prKey]||!S.prs[prKey][idx])return;
+  if(!confirm('Remove this PR entry? This cannot be undone.'))return;
+  S.prs[prKey].splice(idx,1);
+  saveState();
+  renderPRs();
+  renderStatSheet();
+  renderDashboard();
+}
 function renderPRs(){
   renderPRGroup('prStrength',PR_DEFS.strength);
   renderPRGroup('prBiceps',PR_DEFS.biceps);
@@ -1656,9 +1671,11 @@ function renderPRGroup(containerId,defs){
     const recent=[...history].reverse().slice(0,4);
     recent.forEach((h,i)=>{
       const isBest=h===best;
+      const realIdx=history.length-1-i;
       histHtml+=`<div class="pr-history-row${isBest?' best-entry':''}">
         <span>${h.date} · Wk${h.week}</span>
         <span>${h.lbs} lbs × ${h.reps}${isBest?'<span class="pr-new">PR</span>':''}</span>
+        <button class="pr-delete-btn" title="Remove this entry" onclick="deletePREntry('${def.key}',${realIdx})">✕</button>
       </div>`;
     });
     let deltaHtml='';
