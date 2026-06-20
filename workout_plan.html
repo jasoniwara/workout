@@ -295,6 +295,17 @@
   .vol-chart .vol-bar-done{fill:var(--accent);}
   .vol-chart .vol-bar-empty{fill:var(--border);}
 
+  /* CIRCUIT */
+  .circuit-round{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;overflow:hidden;}
+  .circuit-round-header{padding:8px 14px 4px;font-size:10px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);}
+  .circuit-row{display:grid;grid-template-columns:1fr 70px 60px 32px;gap:6px;align-items:center;padding:5px 14px 5px;}
+  .circuit-row.set-done{background:color-mix(in srgb,var(--accent) 5%,transparent);}
+  .circuit-row.set-done .circuit-ex-name{color:var(--muted);}
+  .circuit-row.set-done .set-check-btn{background:var(--accent);border-color:var(--accent);color:var(--accent-text);}
+  .circuit-ex-name{font-size:13px;font-weight:500;line-height:1.3;}
+  .circuit-target{display:block;font-size:10px;color:var(--muted);font-weight:400;}
+  .circuit-reps-label{font-size:11px;color:var(--muted);}
+
   /* CARDIO BEST */
   .cardio-best{font-size:11px;color:var(--muted);padding:0 14px 10px;}
   .cardio-best .cardio-best-val{color:var(--accent);font-weight:600;}
@@ -1340,6 +1351,32 @@ function renderDays(week){
 
     day.sections.forEach(sec=>{
       sectionsHtml+=`<div class="ex-section-label">${sec.label}</div>`;
+      if(sec.label.toLowerCase().includes('circuit')){
+        const circExs=sec.exercises.map(ex=>({ex,ei:exGlobalIdx++}));
+        const rounds=circExs.length?circExs[0].ex.sets||3:3;
+        for(let si=0;si<rounds;si++){
+          sectionsHtml+=`<div class="circuit-round"><div class="circuit-round-header">Round ${si+1}</div>`;
+          circExs.forEach(({ex,ei})=>{
+            const log=getLog(dayKey,ei,si);
+            const done=log.done?'set-done':'';
+            const restSec=parseRestSeconds(ex.rest);
+            const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,sessions):null;
+            const lbsVal=log.lbs||'';const repsVal=log.reps||'';
+            const lbsFilled=log.lbs?'filled':'';const repsFilled=log.reps?'filled':'';
+            const inputs=ex.weighted
+              ?`<input class="set-input ${lbsFilled}" type="number" placeholder="lbs" value="${lbsVal}" step="2.5" oninput="handleSetInput('${dayKey}',${ei},${si},'lbs',this)">
+                 <input class="set-input ${repsFilled}" type="number" placeholder="reps" value="${repsVal}" step="1" oninput="handleSetInput('${dayKey}',${ei},${si},'reps',this)">`
+              :`<span class="circuit-reps-label">${ex.reps}</span><span></span>`;
+            sectionsHtml+=`<div class="circuit-row ${done}" id="sr-${dayKey}-${ei}-${si}">
+              <div class="circuit-ex-name">${ex.name}${tgt?`<span class="circuit-target">${tgt.lbs} lbs · ${tgt.reps} reps</span>`:ex.weighted?'':`<span class="circuit-target">${ex.reps}</span>`}</div>
+              ${inputs}
+              <button class="set-check-btn" onclick="toggleSetDone('${dayKey}',${ei},${si},${restSec})">${log.done?'✓':'○'}</button>
+            </div>`;
+          });
+          sectionsHtml+=`</div>`;
+        }
+        return;
+      }
       sec.exercises.forEach(ex=>{
         const ei=exGlobalIdx++;
         if(ex.isCardio){
