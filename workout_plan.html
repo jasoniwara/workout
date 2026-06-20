@@ -1263,6 +1263,18 @@ function getTarget(prKey,sessions){
   if(!range){
     return {lbs:last.weight,reps:last.logged[0].reps,note:`Last logged ${last.weight} lbs × ${last.logged[0].reps}`};
   }
+  // If last session didn't even reach the bottom of the rep range, the weight
+  // is too heavy. Use Epley to estimate true 1RM from what was actually done,
+  // then back-calculate the right weight for the bottom of the rep range.
+  const avgReps=last.logged.reduce((s,l)=>s+l.reps,0)/last.logged.length;
+  if(avgReps<range.min){
+    const inc=inferIncrement(prKey,hist);
+    const e1rm=last.weight*(1+avgReps/30);
+    const rawTarget=e1rm/(1+range.min/30);
+    // round down to nearest increment so the weight is genuinely achievable
+    const newLbs=Math.max(inc,Math.floor(rawTarget/inc)*inc);
+    return {lbs:newLbs,reps:range.min,note:`↓ ${last.weight} lbs was too heavy (avg ${Math.round(avgReps)} reps) — reset to something you can actually own`};
+  }
   const readyToProgress=last.allAtTop&&prev&&prev.allAtTop&&prev.weight===last.weight;
   if(readyToProgress){
     const inc=inferIncrement(prKey,hist);
