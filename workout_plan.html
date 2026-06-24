@@ -305,6 +305,8 @@
   .circuit-ex-name{font-size:13px;font-weight:500;line-height:1.3;}
   .circuit-target{display:block;font-size:10px;color:var(--muted);font-weight:400;}
   .circuit-reps-label{font-size:11px;color:var(--muted);}
+  .circuit-targets{padding:0 14px;margin-bottom:8px;}
+  .circuit-targets .ex-target,.circuit-targets .plateau-flag,.circuit-targets .cardio-best{margin-bottom:6px;}
 
   /* CARDIO BEST */
   .cardio-best{font-size:11px;color:var(--muted);padding:0 14px 10px;}
@@ -989,7 +991,7 @@ function getDays(week){
       {label:'Abs',exercises:[
         {name:'Hanging leg raise',sets:lrs,reps:lrr,rest:'60s',note:'Slow and controlled — no swinging',weighted:false},
         {name:'Ab wheel rollout',sets:aws,reps:awr,rest:'75s',note:p===3?'Full extension':'From knees',weighted:false},
-        {name:'Plank',sets:3,reps:pt,rest:'45s',note:'',weighted:false,isTime:true,bonus:[2,7].includes(week)?{text:'Hold your last set 10s longer',xp:15}:null}]},
+        {name:'Plank',sets:3,reps:pt,rest:'45s',note:'',weighted:false,isTime:true,prKey:'plank',bonus:[2,7].includes(week)?{text:'Hold your last set 10s longer',xp:15}:null}]},
       {label:'Stamina finisher',exercises:[
         {name:'Rowing machine',sets:0,reps:ri,rest:'',note:'Indoor, AC, effective.',weighted:false,isCardio:true,cardioLabel:'Time (min)',prKey:'row_time'}]}]},
     {label:'Day 2',name:'Pull + Biceps',focus:'Back · biceps · rear delts',sections:[
@@ -1109,6 +1111,36 @@ function getCardioBest(prKey){
           if(ex.isCardio&&ex.prKey===prKey){
             const log=S.days[dayKey][gi];
             if(log&&typeof log.val==='number'&&log.val>0&&(best===null||log.val>best))best=log.val;
+          }
+          gi++;
+        }
+      }
+    }
+  }
+  return best;
+}
+// Best logged reps/seconds for a bodyweight or timed exercise (e.g. dips,
+// plank) — same idea as getCardioBest, but reads from the actual set logs
+// instead of a separate cardio value.
+function getRepBest(prKey){
+  let best=null;
+  for(let w=1;w<=12;w++){
+    const days=getDays(w);
+    for(let di=0;di<4;di++){
+      const dayKey=`w${w}d${di}`;
+      if(!S.days[dayKey])continue;
+      const day=days[di];
+      let gi=0;
+      for(let si=0;si<day.sections.length;si++){
+        for(let ei=0;ei<day.sections[si].exercises.length;ei++){
+          const ex=day.sections[si].exercises[ei];
+          if(!ex.weighted&&!ex.isCardio&&ex.prKey===prKey&&ex.sets){
+            const exLog=S.days[dayKey][gi];
+            if(exLog){
+              Object.values(exLog).forEach(log=>{
+                if(log&&log.done&&typeof log.reps==='number'&&log.reps>0&&(best===null||log.reps>best))best=log.reps;
+              });
+            }
           }
           gi++;
         }
@@ -1366,21 +1398,39 @@ function renderDays(week){
       if(sec.label.toLowerCase().includes('circuit')){
         const circExs=sec.exercises.map(ex=>({ex,ei:exGlobalIdx++}));
         const rounds=circExs.length?circExs[0].ex.sets||3:3;
+        // Show each exercise's target/fill-all once, above round 1, rather
+        // than repeating it in every round.
+        sectionsHtml+=`<div class="circuit-targets">`;
+        circExs.forEach(({ex,ei})=>{
+          if(ex.weighted&&ex.prKey){
+            const tgt=getTarget(ex.prKey,sessions);
+            if(tgt){
+              sectionsHtml+=`<div class="ex-target">${ex.name} — Suggested: <span>${tgt.lbs} lbs × ${tgt.reps}</span> — ${tgt.note} <button class="quickfill-chip" onclick="applySuggestedTarget('${dayKey}',${ei},${ex.sets},${tgt.lbs},${tgt.reps})">↺ Fill all rounds</button></div>`;
+            }
+            if(getPlateauFlag(ex.prKey,sessions)){
+              sectionsHtml+=`<div class="plateau-flag">⚠ ${ex.name} — stuck at this weight for 3+ sessions, consider a deload or check form</div>`;
+            }
+          } else if(ex.prKey){
+            const repBest=getRepBest(ex.prKey);
+            if(repBest!==null)sectionsHtml+=`<div class="cardio-best">${ex.name} — Best so far: <span class="cardio-best-val">${repBest}</span> ${ex.isTime?'sec':'reps'}</div>`;
+          }
+        });
+        sectionsHtml+=`</div>`;
         for(let si=0;si<rounds;si++){
           sectionsHtml+=`<div class="circuit-round"><div class="circuit-round-header">Round ${si+1}</div>`;
           circExs.forEach(({ex,ei})=>{
             const log=getLog(dayKey,ei,si);
             const done=log.done?'set-done':'';
             const restSec=parseRestSeconds(ex.rest);
-            const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,sessions):null;
             const lbsVal=log.lbs||'';const repsVal=log.reps||'';
             const lbsFilled=log.lbs?'filled':'';const repsFilled=log.reps?'filled':'';
             const inputs=ex.weighted
               ?`<input class="set-input ${lbsFilled}" type="number" placeholder="lbs" value="${lbsVal}" step="2.5" oninput="handleSetInput('${dayKey}',${ei},${si},'lbs',this)">
                  <input class="set-input ${repsFilled}" type="number" placeholder="reps" value="${repsVal}" step="1" oninput="handleSetInput('${dayKey}',${ei},${si},'reps',this)">`
-              :`<span class="circuit-reps-label">${ex.reps}</span><span></span>`;
+              :`<input class="set-input ${repsFilled}" type="number" placeholder="${ex.isTime?'sec':'reps'}" value="${repsVal}" step="1" oninput="handleSetInput('${dayKey}',${ei},${si},'reps',this)">
+                 <span class="circuit-reps-label">of ${ex.reps}</span>`;
             sectionsHtml+=`<div class="circuit-row ${done}" id="sr-${dayKey}-${ei}-${si}">
-              <div class="circuit-ex-name">${ex.name}${tgt?`<span class="circuit-target">${tgt.lbs} lbs · ${tgt.reps} reps</span>`:ex.weighted?'':`<span class="circuit-target">${ex.reps}</span>`}</div>
+              <div class="circuit-ex-name">${ex.name}</div>
               ${inputs}
               <button class="set-check-btn" onclick="toggleSetDone('${dayKey}',${ei},${si},${restSec})">${log.done?'✓':'○'}</button>
             </div>`;
@@ -1418,7 +1468,9 @@ function renderDays(week){
         const tgt=ex.weighted&&ex.prKey?getTarget(ex.prKey,sessions):null;
         const tgtHtml=tgt?`<div class="ex-target">Suggested: <span>${tgt.lbs} lbs × ${tgt.reps}</span> — ${tgt.note} <button class="quickfill-chip" onclick="applySuggestedTarget('${dayKey}',${ei},${ex.sets},${tgt.lbs},${tgt.reps})">↺ Fill all sets</button></div>`:'';
         const plateauHtml=(ex.weighted&&ex.prKey&&getPlateauFlag(ex.prKey,sessions))?`<div class="plateau-flag">⚠ Stuck at this weight for 3+ sessions — consider a deload or check your form</div>`:'';
-        let colLabels=`<div class="set-col-labels"><span class="set-col-label"></span><span class="set-col-label">${ex.weighted?'Weight (lbs)':'—'}</span><span class="set-col-label">Reps done</span><span class="set-col-label"></span><span class="set-col-label"></span></div>`;
+        const repBest=(!ex.weighted&&ex.prKey)?getRepBest(ex.prKey):null;
+        const repBestHtml=repBest!==null?`<div class="cardio-best">Best so far: <span class="cardio-best-val">${repBest}</span> ${ex.isTime?'sec':'reps'}</div>`:'';
+        let colLabels=`<div class="set-col-labels"><span class="set-col-label"></span><span class="set-col-label">${ex.weighted?'Weight (lbs)':'Target'}</span><span class="set-col-label">${ex.isTime?'Sec done':'Reps done'}</span><span class="set-col-label"></span><span class="set-col-label"></span></div>`;
         let setRowsHtml='';
         for(let si=0;si<ex.sets;si++){
           const log=getLog(dayKey,ei,si);
@@ -1438,12 +1490,14 @@ function renderDays(week){
           } else {
             setRowsHtml+=`<div class="set-row ${done}" id="sr-${dayKey}-${ei}-${si}">
               <div class="set-num">${si+1}</div>
-              <div style="font-size:12px;color:var(--muted);grid-column:2/5;display:flex;align-items:center;">${ex.isTime?'Hold time':'Reps'}: ${ex.reps}</div>
+              <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;">Target: ${ex.reps}</div>
+              <input class="set-input ${repsFilled}" type="number" placeholder="${ex.isTime?'sec':'reps'}" value="${repsVal}" step="1" oninput="handleSetInput('${dayKey}',${ei},${si},'reps',this)">
+              <span></span>
               <button class="set-check-btn" onclick="toggleSetDone('${dayKey}',${ei},${si},${restSec})">${log.done?'✓':'○'}</button>
             </div>`;
           }
         }
-        const fillAllHtml=(ex.weighted&&ex.sets>1)?`<button class="fillall-btn" onclick="fillAllSets('${dayKey}',${ei},${ex.sets})">⇊ Copy set 1 to all sets</button>`:'';
+        const fillAllHtml=(ex.sets>1)?`<button class="fillall-btn" onclick="fillAllSets('${dayKey}',${ei},${ex.sets})">⇊ Copy set 1 to all sets</button>`:'';
         const bonusKey=dayKey+'_'+ei;
         const bonusDone=!!S.bonuses[bonusKey];
         const bonusHtml=ex.bonus?`<div class="bonus-quest ${bonusDone?'bonus-done':''}">
@@ -1459,6 +1513,7 @@ function renderDays(week){
             <div class="ex-target" style="margin-top:3px;font-size:11px;color:var(--muted);">Target: <span style="color:var(--accent);font-weight:600;">${ex.sets} sets × ${ex.reps} reps</span>${restTagHtml}</div>
             ${tgtHtml}
             ${plateauHtml}
+            ${repBestHtml}
           </div></div>
           ${colLabels}
           <div class="set-rows">${setRowsHtml}</div>
